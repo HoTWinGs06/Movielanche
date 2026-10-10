@@ -3,31 +3,249 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MovieLanche - Movie Directory</title>
+  <title>MovieLanche - Real-Time Seat Booking & Locking System</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-  <header>
-    <h1>MovieLanche</h1>
-    <p>Simple movie directory database showcase</p>
+  <header class="app-header">
+    <div class="header-container">
+      <div class="brand">
+        <h1>🎬 MovieLanche</h1>
+        <p class="tagline">Real-Time Seat Locking & Booking System</p>
+      </div>
+
+      <!-- Quick User Switcher Bar for Concurrent Booking Demo -->
+      <div class="demo-user-bar">
+        <span class="switcher-label">⚡ Active User:</span>
+        <button id="switch-user-alice" class="demo-user-btn active" data-user="alice">
+          👤 Alice (User 1)
+        </button>
+        <button id="switch-user-bob" class="demo-user-btn" data-user="bob">
+          👤 Bob (User 2)
+        </button>
+      </div>
+
+      <div class="user-nav" id="user-nav">
+        <!-- Rendered dynamically by app.js: User Badge & Logout -->
+        <button id="open-login-btn" class="nav-btn primary">Log In</button>
+        <button id="open-signup-btn" class="nav-btn secondary">Sign Up</button>
+      </div>
+    </div>
   </header>
 
-  <main class="container">
-    <!-- Status / Loading Banner -->
-    <div id="status-message" class="status-message">Loading movies from database...</div>
+  <!-- Notification Banner Container -->
+  <div id="notification-container" class="notification-container"></div>
 
-    <!-- Movies List Grid -->
-    <section id="movies-container" class="movies-grid"></section>
+  <!-- Timeout Warning Banner -->
+  <div id="timeout-banner" class="timeout-banner hidden">
+    <div class="timeout-content">
+      <span class="timeout-icon">⚠️</span>
+      <div class="timeout-text">
+        <strong>30-Second Cooldown Penalty Active!</strong>
+        <p>Your 5-minute seat lock expired without payment. You must wait <span id="timeout-countdown">30</span> seconds before locking seats again.</p>
+      </div>
+    </div>
+  </div>
+
+  <main class="container">
+    <!-- View Navigation Tabs -->
+    <div class="view-tabs">
+      <button id="tab-movies" class="view-tab active">🎬 Movies Catalogue</button>
+      <button id="tab-booking" class="view-tab">🎟️ Seat Booking Boilerplate</button>
+    </div>
+
+    <!-- SECTION 1: Movies Catalogue Grid -->
+    <section id="section-movies" class="view-section">
+      <div class="search-filter-bar">
+        <input type="text" id="search-input" placeholder="Search movies by title, director..." />
+        <select id="genre-select">
+          <option value="">All Genres</option>
+          <option value="Action">Action</option>
+          <option value="Drama">Drama</option>
+          <option value="Sci-Fi">Sci-Fi</option>
+          <option value="Thriller">Thriller</option>
+          <option value="Fantasy">Fantasy</option>
+        </select>
+      </div>
+
+      <div id="status-message" class="status-message">Loading movies from database...</div>
+      <div id="movies-container" class="movies-grid"></div>
+    </section>
+
+    <!-- SECTION 2: Interactive Seat Booking Boilerplate Template -->
+    <section id="section-booking" class="view-section hidden">
+      <div class="booking-header-card">
+        <h2>🎟️ Seat Booking & Concurrent Locking System</h2>
+        <p class="subtitle">Experience immediate 5-minute seat locks, concurrent user queueing, 30-second penalty timeouts, and real-time open seat notifications!</p>
+
+        <!-- Show Timing Selector -->
+        <div class="show-selector-bar">
+          <div class="selector-group">
+            <label for="show-select">Select Movie & Show Timing:</label>
+            <select id="show-select" class="custom-select">
+              <option value="">Loading show timings...</option>
+            </select>
+          </div>
+          <button id="refresh-seats-btn" class="refresh-btn">🔄 Refresh Seat Grid</button>
+        </div>
+      </div>
+
+      <div class="booking-layout">
+        <!-- Left: Interactive Seat Map Grid -->
+        <div class="seat-map-card">
+          <div class="screen-container">
+            <div class="cinema-screen">SCREEN THIS WAY</div>
+          </div>
+
+          <!-- Seat Grid Legend -->
+          <div class="seat-legend">
+            <div class="legend-item"><span class="seat-box available"></span> Available</div>
+            <div class="legend-item"><span class="seat-box locked-me"></span> Locked by You (5m Timer)</div>
+            <div class="legend-item"><span class="seat-box queued-me"></span> Queued by You</div>
+            <div class="legend-item"><span class="seat-box locked-other"></span> Locked by Another User</div>
+            <div class="legend-item"><span class="seat-box booked"></span> Booked</div>
+          </div>
+
+          <!-- Interactive Seat Matrix Grid -->
+          <div id="seat-grid" class="seat-grid">
+            <div class="loading-spinner">Loading seats...</div>
+          </div>
+        </div>
+
+        <!-- Right: Active Lock & Booking Form Panel -->
+        <div class="booking-action-card">
+          <div id="no-seat-selected" class="action-placeholder">
+            <div class="placeholder-icon">💺</div>
+            <h3>No Seat Locked</h3>
+            <p>Click on any <strong>Available</strong> seat to lock it for 5 minutes, or click a <strong>Locked Seat</strong> to queue in line for when it opens!</p>
+          </div>
+
+          <!-- Active Lock Panel (5-Minute Countdown & Details Form) -->
+          <div id="active-lock-panel" class="active-lock-panel hidden">
+            <div class="lock-header">
+              <span class="lock-badge active">🔒 SEAT LOCKED</span>
+              <span class="seat-title">Seat <strong id="locked-seat-num">A1</strong></span>
+            </div>
+
+            <!-- 5-Minute Countdown Timer Widget -->
+            <div class="timer-box">
+              <div class="timer-label">Time Remaining to Complete Payment:</div>
+              <div id="lock-timer" class="timer-display">05:00</div>
+              <div class="timer-progress-bar"><div id="timer-progress" class="timer-progress"></div></div>
+            </div>
+
+            <!-- Customer Details & Payment Form -->
+            <form id="booking-confirm-form" class="booking-form">
+              <h4>Customer Details & Payment</h4>
+              <div class="form-group">
+                <label for="cust-name">Full Name</label>
+                <input type="text" id="cust-name" required placeholder="Alice Smith" />
+              </div>
+              <div class="form-group">
+                <label for="cust-email">Email Address</label>
+                <input type="email" id="cust-email" required placeholder="alice@example.com" />
+              </div>
+              <div class="form-group">
+                <label for="payment-method">Payment Method</label>
+                <select id="payment-method" class="custom-select">
+                  <option value="Credit / Debit Card">💳 Credit / Debit Card</option>
+                  <option value="UPI / GPay / PhonePe">📱 UPI / GPay / PhonePe</option>
+                  <option value="Net Banking">🏦 Net Banking</option>
+                </select>
+              </div>
+
+              <div class="price-summary">
+                <span>Total Amount:</span>
+                <strong id="booking-price">₹200.00</strong>
+              </div>
+
+              <div class="form-actions">
+                <button type="submit" id="confirm-booking-btn" class="btn primary-btn">
+                  💳 Confirm Payment & Book
+                </button>
+                <button type="button" id="cancel-lock-btn" class="btn secondary-btn">
+                  ❌ Cancel Lock
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Queue Status Panel -->
+          <div id="queue-status-panel" class="queue-status-panel hidden">
+            <div class="queue-badge">⏳ IN QUEUE (POSITION #<span id="queue-pos-num">1</span>)</div>
+            <h3>Locked in Line for Seat <span id="queued-seat-num">A1</span></h3>
+            <p>This seat is currently held by another user. If they fail to complete payment within 5 minutes, <strong>the seat will automatically open for you</strong> and your 5-minute booking window will start!</p>
+            <button id="leave-queue-btn" class="btn secondary-btn">Leave Queue</button>
+          </div>
+
+          <!-- Booking Confirmation Success Card -->
+          <div id="booking-success-panel" class="booking-success-panel hidden">
+            <div class="success-icon">🎉</div>
+            <h3>Booking Confirmed!</h3>
+            <p>Your seats have been booked successfully.</p>
+            <div class="ticket-card">
+              <div class="ticket-row"><span>Booking Code:</span> <strong id="ticket-code">BMS-XXXXX</strong></div>
+              <div class="ticket-row"><span>Movie:</span> <strong id="ticket-movie">Inception</strong></div>
+              <div class="ticket-row"><span>Theatre:</span> <strong id="ticket-theatre">PVR Forum</strong></div>
+              <div class="ticket-row"><span>Seats:</span> <strong id="ticket-seats">A1</strong></div>
+              <div class="ticket-row"><span>Total Paid:</span> <strong id="ticket-amount">₹200.00</strong></div>
+            </div>
+            <button id="book-another-btn" class="btn primary-btn" style="margin-top: 15px;">Book Another Seat</button>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <!-- Movie Detail Modal -->
   <div id="detail-modal" class="modal hidden">
     <div class="modal-content">
       <button id="close-modal-btn" class="close-btn">&times;</button>
-      <div id="modal-body">
-        <!-- Dynamic detail content rendered here -->
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- User Log In / Sign Up Modal -->
+  <div id="auth-modal" class="modal hidden">
+    <div class="modal-content auth-modal-content">
+      <button id="close-auth-btn" class="close-btn">&times;</button>
+      <div class="auth-tabs">
+        <button id="tab-login" class="auth-tab active">Log In</button>
+        <button id="tab-signup" class="auth-tab">Sign Up</button>
       </div>
+
+      <div id="auth-alert" class="auth-alert hidden"></div>
+
+      <form id="login-form" class="auth-form">
+        <h2>Welcome Back</h2>
+        <div class="form-group">
+          <label for="login-email">Email Address</label>
+          <input type="email" id="login-email" required placeholder="alice@example.com" />
+        </div>
+        <div class="form-group">
+          <label for="login-password">Password</label>
+          <input type="password" id="login-password" required placeholder="••••••••" />
+        </div>
+        <button type="submit" class="submit-btn">Log In</button>
+      </form>
+
+      <form id="signup-form" class="auth-form hidden">
+        <h2>Create Account</h2>
+        <div class="form-group">
+          <label for="signup-name">Full Name</label>
+          <input type="text" id="signup-name" required placeholder="John Doe" />
+        </div>
+        <div class="form-group">
+          <label for="signup-email">Email Address</label>
+          <input type="email" id="signup-email" required placeholder="user@example.com" />
+        </div>
+        <div class="form-group">
+          <label for="signup-password">Password (min. 6 chars)</label>
+          <input type="password" id="signup-password" required minlength="6" placeholder="••••••••" />
+        </div>
+        <button type="submit" class="submit-btn">Sign Up</button>
+      </form>
     </div>
   </div>
 

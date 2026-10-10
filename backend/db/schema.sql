@@ -1,22 +1,35 @@
 -- Movielanche schema (PostgreSQL)
---
--- Ports the booking domain from the earlier MongoDB draft to Postgres, since
--- that is the database committed in the repo (pg dependency). Kept in one
--- migration file so a clean clone can `npm run db:setup` and be demo-ready.
+
+-- Drop existing views and tables to ensure clean schema build
+DROP VIEW IF EXISTS shows CASCADE;
+DROP VIEW IF EXISTS seats CASCADE;
+DROP VIEW IF EXISTS theatre_details CASCADE;
+
+DROP TABLE IF EXISTS booking_seats CASCADE;
+DROP TABLE IF EXISTS bookings CASCADE;
+DROP TABLE IF EXISTS user_notifications CASCADE;
+DROP TABLE IF EXISTS user_timeouts CASCADE;
+DROP TABLE IF EXISTS locking_logs CASCADE;
+DROP TABLE IF EXISTS demo_seats CASCADE;
+DROP TABLE IF EXISTS showings CASCADE;
+DROP TABLE IF EXISTS theatres_details CASCADE;
+DROP TABLE IF EXISTS refresh_tokens CASCADE;
+DROP TABLE IF EXISTS movie_details CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
 
 CREATE TABLE IF NOT EXISTS users (
-  id            SERIAL PRIMARY KEY,
+  user_id       SERIAL PRIMARY KEY,
   name          TEXT NOT NULL,
+  email_id      TEXT NOT NULL UNIQUE,
   email         TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
+  text          TEXT DEFAULT '',
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- One row per refresh token, family_id ties a rotation lineage together so a
--- replayed token can revoke the whole family. Only the SHA-256 hash is kept.
 CREATE TABLE IF NOT EXISTS refresh_tokens (
   id            SERIAL PRIMARY KEY,
-  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id       INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
   token_hash    TEXT NOT NULL UNIQUE,
   family_id     TEXT NOT NULL,
   expires_at    TIMESTAMPTZ NOT NULL,
@@ -26,116 +39,125 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS refresh_tokens_user_idx ON refresh_tokens(user_id);
-CREATE INDEX IF NOT EXISTS refresh_tokens_family_idx ON refresh_tokens(family_id);
-CREATE INDEX IF NOT EXISTS refresh_tokens_expiry_idx ON refresh_tokens(expires_at);
-
-CREATE TABLE IF NOT EXISTS movies (
-  id           SERIAL PRIMARY KEY,
-  title        TEXT NOT NULL,
+CREATE TABLE IF NOT EXISTS movie_details (
+  movie_id     SERIAL PRIMARY KEY,
+  movie_title  TEXT NOT NULL,
   description  TEXT NOT NULL DEFAULT '',
   genres       TEXT[] NOT NULL DEFAULT '{}',
+  genre        TEXT DEFAULT '',
   language     TEXT NOT NULL DEFAULT 'English',
-  duration_min INTEGER NOT NULL CHECK (duration_min > 0),
-  poster_url   TEXT NOT NULL DEFAULT '',
-  rating       NUMERIC(3,1) CHECK (rating >= 0 AND rating <= 10),
+  duration_min INTEGER CHECK (duration_min > 0),
+  release_date DATE,
   release_year INTEGER,
-  -- now_showing / coming_soon; matches the value the frontend filters on.
-  status       TEXT NOT NULL DEFAULT 'now_showing'
-               CHECK (status IN ('now_showing', 'coming_soon'))
+  poster_url   TEXT NOT NULL DEFAULT '/poster-placeholder.svg',
+  image_url    TEXT NOT NULL DEFAULT '/poster-placeholder.svg',
+  rating       TEXT DEFAULT 'PG-13',
+  director     TEXT DEFAULT '',
+  "IMDB_score" NUMERIC(3,1) CHECK ("IMDB_score" >= 0 AND "IMDB_score" <= 10),
+  status       TEXT NOT NULL DEFAULT 'now_showing' CHECK (status IN ('now_showing', 'coming_soon'))
 );
 
--- Free-text search on title, and filter support for the discovery flow.
-CREATE INDEX IF NOT EXISTS movies_title_lower_idx ON movies (LOWER(title));
-CREATE INDEX IF NOT EXISTS movies_genres_idx ON movies USING GIN (genres);
-CREATE INDEX IF NOT EXISTS movies_language_idx ON movies (language);
-CREATE INDEX IF NOT EXISTS movies_status_idx ON movies (status);
-
-CREATE TABLE IF NOT EXISTS theatres (
+CREATE TABLE IF NOT EXISTS theatres_details (
   id       SERIAL PRIMARY KEY,
   name     TEXT NOT NULL,
-  location TEXT NOT NULL
+  location TEXT NOT NULL DEFAULT 'Downtown'
 );
 
-CREATE INDEX IF NOT EXISTS theatres_location_lower_idx ON theatres (LOWER(location));
+CREATE OR REPLACE VIEW theatre_details AS SELECT id, name, location FROM theatres_details;
 
-CREATE TABLE IF NOT EXISTS shows (
-  id         SERIAL PRIMARY KEY,
-  movie_id   INTEGER NOT NULL REFERENCES movies(id) ON DELETE CASCADE,
-  theatre_id INTEGER NOT NULL REFERENCES theatres(id) ON DELETE CASCADE,
-  date       DATE NOT NULL,
-  start_time TIME NOT NULL,
-  screen     TEXT NOT NULL DEFAULT 'Screen 1',
-  price      NUMERIC(10,2) NOT NULL CHECK (price >= 0)
+CREATE TABLE IF NOT EXISTS showings (
+  id           SERIAL PRIMARY KEY,
+  movie_id     INTEGER NOT NULL REFERENCES movie_details(movie_id) ON DELETE CASCADE,
+  theatre_id   INTEGER NOT NULL REFERENCES theatres_details(id) ON DELETE CASCADE,
+  date         DATE NOT NULL DEFAULT CURRENT_DATE,
+  start_time   TIME NOT NULL,
+  screen       TEXT NOT NULL DEFAULT 'Screen 1',
+  price        NUMERIC(10,2) NOT NULL DEFAULT 200.00 CHECK (price >= 0),
+  runtime      INTEGER DEFAULT 120,
+  max_seats    INTEGER DEFAULT 40,
+  filled_seats INTEGER DEFAULT 0
 );
 
-CREATE INDEX IF NOT EXISTS shows_movie_date_idx ON shows (movie_id, date);
-CREATE INDEX IF NOT EXISTS shows_theatre_date_idx ON shows (theatre_id, date);
+CREATE OR REPLACE VIEW shows AS 
+SELECT id, movie_id, theatre_id, date, start_time, screen, price 
+FROM showings;
 
--- One row per bookable seat. The unique constraint is what makes the atomic
--- seat lock in bookings.js safe.
-CREATE TABLE IF NOT EXISTS seats (
-  id         SERIAL PRIMARY KEY,
-  show_id    INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS demo_seats (
+  seat_id     SERIAL PRIMARY KEY,
+  show_id     INTEGER NOT NULL REFERENCES showings(id) ON DELETE CASCADE,
   seat_number TEXT NOT NULL,
-  status     TEXT NOT NULL DEFAULT 'available'
-             CHECK (status IN ('available', 'booked')),
-  booked_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  row         VARCHAR(5),
+  cost        INTEGER DEFAULT 200,
+  isbooked    BOOLEAN NOT NULL DEFAULT FALSE,
+  islocked    BOOLEAN NOT NULL DEFAULT FALSE,
+  status      TEXT NOT NULL DEFAULT 'available' CHECK (status IN ('available', 'locked', 'booked')),
+  booked_by   INTEGER REFERENCES users(user_id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (show_id, seat_number)
 );
 
-CREATE INDEX IF NOT EXISTS seats_show_status_idx ON seats (show_id, status);
+CREATE OR REPLACE VIEW seats AS 
+SELECT seat_id AS id, show_id, seat_number, status, booked_by, created_at 
+FROM demo_seats;
 
-
-CREATE TABLE IF NOT EXISTS bookings (
+-- Table to track seat locking, queueing, and expiration history
+CREATE TABLE IF NOT EXISTS locking_logs (
   id           SERIAL PRIMARY KEY,
-  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  show_id      INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
-  booking_code TEXT NOT NULL UNIQUE,
-  seats        TEXT[] NOT NULL,
-  total_amount NUMERIC(10,2) NOT NULL CHECK (total_amount >= 0),
-  status       TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed')),
+  user_id      INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  show_id      INTEGER NOT NULL REFERENCES showings(id) ON DELETE CASCADE,
+  movie_id     INTEGER REFERENCES movie_details(movie_id) ON DELETE CASCADE,
+  seat_number  TEXT NOT NULL,
+  booking_time TIME,
+  status       TEXT NOT NULL DEFAULT 'LOCKED' CHECK (status IN ('LOCKED', 'QUEUED', 'CONFIRMED', 'EXPIRED', 'RELEASED', 'CANCELLED')),
+  queue_order  INTEGER NOT NULL DEFAULT 1,
+  locked_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at   TIMESTAMPTZ NOT NULL,
+  notified_at  TIMESTAMPTZ,
+  isbooked     BOOLEAN NOT NULL DEFAULT FALSE,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS bookings_user_created_idx
-  ON bookings (user_id, created_at DESC);
+-- Table to track 30-second penalty timeouts for users whose 5-minute lock expired without payment
+CREATE TABLE IF NOT EXISTS user_timeouts (
+  user_id       INTEGER PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+  timeout_until TIMESTAMPTZ NOT NULL,
+  reason        TEXT DEFAULT '5-minute lock expired without booking',
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
--- Stops two bookings for one show ever sharing a seat, even if the seat-table
--- lock is bypassed. `unnest()` is not allowed in an index expression, so the
--- normalised join table carries that guarantee instead: one row per booked
--- seat, unique on (show_id, seat_number).
+-- Real-time notification table for users (e.g. when seat opens up for queued 2nd person)
+CREATE TABLE IF NOT EXISTS user_notifications (
+  id          SERIAL PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  show_id     INTEGER NOT NULL REFERENCES showings(id) ON DELETE CASCADE,
+  seat_number TEXT NOT NULL,
+  message     TEXT NOT NULL,
+  is_read     BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS bookings (
+  id             SERIAL PRIMARY KEY,
+  user_id        INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+  show_id        INTEGER NOT NULL REFERENCES showings(id) ON DELETE CASCADE,
+  booking_code   TEXT NOT NULL UNIQUE,
+  seats          TEXT[] NOT NULL,
+  customer_name  TEXT,
+  customer_email TEXT,
+  total_amount   NUMERIC(10,2) NOT NULL CHECK (total_amount >= 0),
+  status         TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed', 'cancelled')),
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS booking_seats (
   booking_id  INTEGER NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
-  show_id     INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+  show_id     INTEGER NOT NULL REFERENCES showings(id) ON DELETE CASCADE,
   seat_number TEXT NOT NULL,
   PRIMARY KEY (show_id, seat_number)
 );
 
-CREATE INDEX IF NOT EXISTS booking_seats_booking_idx ON booking_seats (booking_id);
-
--- Deleting a user cascades their bookings, and seats.booked_by is ON DELETE SET
--- NULL -- which left seats stuck at status='booked' with nobody owning them,
--- permanently shrinking the capacity of every show they belonged to.
---
--- Declared last because it reads booking_seats, which must exist first. It is
--- a FOR EACH STATEMENT trigger, so the function body is only parsed at fire
--- time, not at creation.
-CREATE OR REPLACE FUNCTION release_seats_for_deleted_bookings() RETURNS TRIGGER AS $$
-BEGIN
-  UPDATE seats st
-     SET status = 'available', booked_by = NULL
-   WHERE st.status = 'booked'
-     AND NOT EXISTS (
-       SELECT 1 FROM booking_seats bs
-       WHERE bs.show_id = st.show_id AND bs.seat_number = st.seat_number
-     );
-  RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS bookings_release_seats ON bookings;
-CREATE TRIGGER bookings_release_seats
-  AFTER DELETE ON bookings
-  FOR EACH STATEMENT EXECUTE FUNCTION release_seats_for_deleted_bookings();
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS locking_logs_show_seat_idx ON locking_logs (show_id, seat_number, status);
+CREATE INDEX IF NOT EXISTS locking_logs_user_idx ON locking_logs (user_id);
+CREATE INDEX IF NOT EXISTS demo_seats_show_status_idx ON demo_seats (show_id, status);
+CREATE INDEX IF NOT EXISTS user_timeouts_until_idx ON user_timeouts (timeout_until);

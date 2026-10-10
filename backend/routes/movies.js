@@ -6,104 +6,58 @@ const { showNotStartedSql, cinemaTimeZone } = require('../config/timezone');
 const router = express.Router();
 
 /**
- * Serialise a Postgres movie row into the shape the frontend consumes.
- *
- * Field aliases are deliberate: public/app.js reads snake_case
- * (poster_url, release_year) while the rest of our API is camelCase, so both
- * spellings are emitted rather than forcing the frontend to change mid-sprint.
+ * Format a movie row from movie_details into standard object
  */
 function toCard(row) {
+  const movieId = row.movie_id || row.id;
+  const title = row.movie_title || row.title || `Movie #${movieId}`;
+  const relDate = row.release_date ? (row.release_date instanceof Date ? row.release_date.toISOString().slice(0, 10) : String(row.release_date).slice(0, 10)) : null;
+  const relYear = relDate ? parseInt(relDate.slice(0, 4), 10) : (row.release_year || null);
+  const poster = row.image_url || row.poster_url || row.poster || '/poster-placeholder.svg';
+
   return {
-    id: String(row.id),
-    title: row.title,
-    description: row.description,
-    genres: row.genres || [],
-    genre: (row.genres || [])[0] || null,
-    language: row.language,
-    durationMin: row.duration_min,
-    posterUrl: row.poster_url,
-    poster_url: row.poster_url,
-    rating: row.rating === null ? null : Number(row.rating),
-    releaseYear: row.release_year,
-    release_year: row.release_year,
-    status: row.status,
+    id: String(movieId),
+    movie_id: movieId,
+    title: title,
+    movie_title: title,
+    name: title,
+    description: row.description || '',
+    release_date: relDate,
+    release_year: relYear,
+    releaseYear: relYear,
+    year: relYear,
+    rating: row.rating || null,
+    genre: row.genre || (Array.isArray(row.genres) ? row.genres[0] : ''),
+    genres: Array.isArray(row.genres) ? row.genres : (row.genre ? [row.genre] : []),
+    director: row.director || '',
+    IMDB_score: row.IMDB_score !== null && row.IMDB_score !== undefined ? Number(row.IMDB_score) : null,
+    imdb_score: row.IMDB_score !== null && row.IMDB_score !== undefined ? Number(row.IMDB_score) : null,
+    score: row.IMDB_score !== null && row.IMDB_score !== undefined ? Number(row.IMDB_score) : null,
+    image_url: poster,
+    poster_url: poster,
+    posterUrl: poster,
+    poster: poster,
+    image: poster
   };
 }
 
 /**
- * Postgres DATE columns arrive as raw 'YYYY-MM-DD' strings (config/db.js
- * overrides the type parser) so no timezone conversion can shift them.
- */
-function toDateString(value) {
-  return value == null ? null : String(value).slice(0, 10);
-}
-
-/** TIME columns arrive as 'HH:mm:ss'. */
-function toTimeString(value) {
-  return String(value).slice(0, 5);
-}
-
-/** Clamped pagination; returns null when the caller sent something invalid. */
-function parsePaging(query) {
-  const limitRaw = qString(query.limit);
-  const offsetRaw = qString(query.offset);
-  const limit = limitRaw === null ? 50 : Number(limitRaw);
-  const offset = offsetRaw === null ? 0 : Number(offsetRaw);
-  if (!Number.isInteger(limit) || limit < 1 || limit > 100) return null;
-  if (!Number.isInteger(offset) || offset < 0) return null;
-  return { limit, offset };
-}
-
-/**
- * GET /api/movies?search=&genre=&language=&filter=now_showing|coming_soon&limit=&offset=
- *
- * Every parameter is optional and they combine with AND. `genre` matches any
- * element of the genres array, which is what a single-select filter needs.
+ * GET /api/movies
+ * Optional query params: search, genre
  */
 router.get('/', async (req, res) => {
-  const search = qString(req.query.search);
-  const genre = qString(req.query.genre);
-  const language = qString(req.query.language);
-  const filter = qString(req.query.filter);
-
-  if (filter && filter !== 'now_showing' && filter !== 'coming_soon') {
-    return res.status(400).json({
-      error: { code: 'BAD_REQUEST', message: "filter must be 'now_showing' or 'coming_soon'" },
-    });
-  }
-
-  const paging = parsePaging(req.query);
-  if (!paging) {
-    return res.status(400).json({
-      error: { code: 'BAD_REQUEST', message: 'limit must be 1-100 and offset must be >= 0' },
-    });
-  }
+  const { search, genre } = req.query;
 
   const where = [];
   const params = [];
 
-  if (search) {
-    // Wildcards are escaped so a literal '%' searches for '%'.
-    params.push(`%${escapeLike(search)}%`);
-    where.push(`title ILIKE $${params.length} ESCAPE '\\'`);
+  if (search && search.trim()) {
+    params.push(`%${search.trim()}%`);
+    where.push(`(movie_title ILIKE $${params.length} OR description ILIKE $${params.length} OR director ILIKE $${params.length})`);
   }
-  if (genre) {
-    // genres is an array column, so the filter is an array membership test.
-    // LOWER() on both sides because the stored value is 'Action, Drama' style
-    // text and a case-sensitive match silently returned nothing for 'action'.
-    params.push(genre);
-    where.push(`EXISTS (
-      SELECT 1 FROM unnest(genres) g
-      WHERE LOWER(g) = LOWER($${params.length})
-    )`);
-  }
-  if (language) {
-    params.push(language);
-    where.push(`LOWER(language) = LOWER($${params.length})`);
-  }
-  if (filter) {
-    params.push(filter);
-    where.push(`status = $${params.length}`);
+  if (genre && genre.trim()) {
+    params.push(`%${genre.trim()}%`);
+    where.push(`genre ILIKE $${params.length}`);
   }
 
   // Pushed BEFORE the SQL is built so the placeholder indices line up.
@@ -112,23 +66,17 @@ router.get('/', async (req, res) => {
   const offsetIdx = params.length;
 
   const sql = `
-    SELECT id, title, description, genres, language, duration_min,
-           poster_url, rating, release_year, status
-    FROM movies
+    SELECT *
+    FROM movie_details
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ORDER BY title
-    LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
+    ORDER BY movie_id ASC`;
 
   try {
     const result = await db.query(sql, params);
-    // public/app.js reads `data.success` / `data.data`, so the envelope is part
-    // of the contract with the committed frontend.
     return res.json({
       success: true,
       count: result.rowCount,
-      limit: paging.limit,
-      offset: paging.offset,
-      data: result.rows.map(toCard),
+      data: result.rows.map(toCard)
     });
   } catch (err) {
     console.error('Error fetching movies:', err.message);
@@ -139,136 +87,8 @@ router.get('/', async (req, res) => {
 });
 
 /**
- * GET /api/movies/near?location=&date=YYYY-MM-DD
- *
- * Backs the "location" step of the discovery flow. Location matching is a
- * case-insensitive substring so a search box can send a partial value, and an
- * unknown location returns an empty list rather than a 404.
+ * GET /api/movies/:id
  */
-router.get('/near', async (req, res) => {
-  const location = qString(req.query.location);
-  const date = qString(req.query.date);
-
-  if (!location) {
-    return res.status(400).json({ error: { code: 'BAD_REQUEST', message: 'location is required' } });
-  }
-  // A regex alone accepts 2026-13-45 and 2026-02-31, which Postgres rejects at
-  // the DATE cast with 22008 -- a 500 for a client typo.
-  if (!isValidDate(date)) {
-    return res.status(400).json({
-      error: { code: 'BAD_REQUEST', message: 'date must be a real calendar date as YYYY-MM-DD' },
-    });
-  }
-
-  try {
-    const result = await db.query(
-      `SELECT t.id AS theatre_id, t.name, t.location,
-              s.id AS show_id, s.start_time, s.screen, s.price,
-              (SELECT COUNT(*) FROM seats st
-                WHERE st.show_id = s.id AND st.status = 'available') AS seats_available,
-              m.id AS movie_id, m.title, m.language, m.duration_min,
-              m.poster_url, m.status AS movie_status
-       FROM shows s
-       JOIN theatres t ON t.id = s.theatre_id
-       JOIN movies m ON m.id = s.movie_id
-       WHERE t.location ILIKE $1 ESCAPE '\\'
-         AND s.date = $2
-         AND ${showNotStartedSql('s')}
-       ORDER BY t.name, s.start_time`,
-      [`%${escapeLike(location)}%`, date]
-    );
-
-    const theatres = new Map();
-    for (const row of result.rows) {
-      const tid = String(row.theatre_id);
-      if (!theatres.has(tid)) {
-        theatres.set(tid, { theatreId: tid, name: row.name, location: row.location, shows: [] });
-      }
-      theatres.get(tid).shows.push({
-        showId: String(row.show_id),
-        startTime: toTimeString(row.start_time),
-        screen: row.screen,
-        price: Number(row.price),
-        seatsAvailable: Number(row.seats_available),
-        movie: {
-          id: String(row.movie_id),
-          title: row.title,
-          language: row.language,
-          durationMin: row.duration_min,
-          posterUrl: row.poster_url,
-          status: row.movie_status,
-        },
-      });
-    }
-
-    return res.json({ location, date, theatres: [...theatres.values()] });
-  } catch (err) {
-    console.error('Error fetching nearby shows:', err.message);
-    return res.status(500).json({
-      error: { code: 'SERVER_ERROR', message: 'Failed to fetch shows for location' },
-    });
-  }
-});
-
-/** GET /api/movies/:id/shows?date=YYYY-MM-DD — shows grouped by theatre */
-router.get('/:id/shows', async (req, res) => {
-  const id = qId(req.params.id);
-  const date = qString(req.query.date);
-
-  if (id === null) {
-    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Movie not found' } });
-  }
-  // A regex alone accepts 2026-13-45 and 2026-02-31, which Postgres rejects at
-  // the DATE cast with 22008 -- a 500 for a client typo.
-  if (!isValidDate(date)) {
-    return res.status(400).json({
-      error: { code: 'BAD_REQUEST', message: 'date must be a real calendar date as YYYY-MM-DD' },
-    });
-  }
-
-  try {
-    const exists = await db.query('SELECT 1 FROM movies WHERE id = $1', [id]);
-    if (exists.rowCount === 0) {
-      return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Movie not found' } });
-    }
-
-    const result = await db.query(
-      `SELECT t.id AS theatre_id, t.name, t.location,
-              s.id AS show_id, s.start_time, s.screen, s.price,
-              (SELECT COUNT(*) FROM seats st
-                WHERE st.show_id = s.id AND st.status = 'available') AS seats_available
-       FROM shows s
-       JOIN theatres t ON t.id = s.theatre_id
-       WHERE s.movie_id = $1
-         AND s.date = $2
-         AND ${showNotStartedSql('s')}
-       ORDER BY t.name, s.start_time`,
-      [id, date]
-    );
-
-    const theatres = new Map();
-    for (const row of result.rows) {
-      const tid = String(row.theatre_id);
-      if (!theatres.has(tid)) {
-        theatres.set(tid, { theatreId: tid, name: row.name, location: row.location, shows: [] });
-      }
-      theatres.get(tid).shows.push({
-        showId: String(row.show_id),
-        startTime: toTimeString(row.start_time),
-        screen: row.screen,
-        price: Number(row.price),
-        seatsAvailable: Number(row.seats_available),
-      });
-    }
-
-    return res.json({ movieId: String(id), date, theatres: [...theatres.values()] });
-  } catch (err) {
-    console.error(`Error fetching shows for movie ${id}:`, err.message);
-    return res.status(500).json({ error: { code: 'SERVER_ERROR', message: 'Failed to fetch shows' } });
-  }
-});
-
-/** GET /api/movies/:id — detail view, including the dates that have shows */
 router.get('/:id', async (req, res) => {
   const id = qId(req.params.id);
 
@@ -277,36 +97,32 @@ router.get('/:id', async (req, res) => {
   }
 
   try {
-    const movie = await db.query(
-      `SELECT id, title, description, genres, language, duration_min,
-              poster_url, rating, release_year, status
-       FROM movies WHERE id = $1`,
+    const result = await db.query(
+      `SELECT * FROM movie_details WHERE movie_id = $1 OR id = $1`,
       [id]
     );
 
-    if (movie.rowCount === 0) {
+    if (result.rowCount === 0) {
       return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Movie not found' } });
     }
 
-    // Distinct upcoming show dates power the date picker.
-    //
-    // Must use the same IST cutoff as booking, not CURRENT_DATE: with the
-    // database in UTC this offered today at 21:30 IST when every show had
-    // already started, so the picker showed a day that then returned nothing.
-    const dates = await db.query(
-      `SELECT DISTINCT date
-       FROM shows s
-       WHERE s.movie_id = $1
-         AND ${showNotStartedSql('s')}
-       ORDER BY date`,
+    const movieCard = toCard(result.rows[0]);
+
+    // Fetch showings if showings table exists
+    const showings = await db.query(
+      `SELECT s.*, t.name as theatre_name
+       FROM showings s
+       LEFT JOIN theatre_details t ON t.id = s.theatre_id
+       WHERE s.movie_id = $1`,
       [id]
-    );
+    ).catch(() => ({ rows: [] }));
 
     return res.json({
-      ...toCard(movie.rows[0]),
-      showDates: dates.rows.map((r) => toDateString(r.date)),
-      // So the UI can label times as IST rather than guessing.
-      timezone: cinemaTimeZone(),
+      success: true,
+      data: {
+        ...movieCard,
+        showings: showings.rows || []
+      }
     });
   } catch (err) {
     console.error(`Error fetching movie ${id}:`, err.message);

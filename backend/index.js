@@ -11,49 +11,11 @@ const authRouter = require('./routes/auth');
 const bookingsRouter = require('./routes/bookings');
 
 const app = express();
-const PORT = parseInt(process.env.PORT || '5000', 10);
-const isProd = process.env.NODE_ENV === 'production';
+const PORT = parseInt(3000, 10);
 
-// Behind a reverse proxy, req.ip is the proxy's address unless Express is told
-// to trust the hop -- which would make every caller share one rate-limit bucket.
-// Behind a reverse proxy, req.ip is the PROXY's address unless Express is told
-// to trust the hop -- which would make every caller share one rate-limit bucket,
-// so ~40 users behind one campus NAT would lock each other out. Default to 1
-// hop (the common single-proxy case) and let TRUST_PROXY override with an
-// explicit hop count, 'false', or a subnet.
-const trustProxy = process.env.TRUST_PROXY;
-app.set(
-  'trust proxy',
-  trustProxy === undefined || trustProxy === '' ? 1
-    : /^(false|0|no)$/i.test(trustProxy) ? false
-      : /^[0-9]+$/.test(trustProxy) ? Number(trustProxy)
-        : trustProxy
-);
-
-app.use(
-  helmet({
-    // The default CSP has script-src 'self' + script-src-attr 'none', which
-    // BLOCKS the inline onerror handler the committed public/app.js puts on
-    // every <img> -- posters silently stopped falling back. Two options here:
-    // allow inline attributes (weaker, but keeps the teammate's file working
-    // untouched), or refactor app.js. We are not editing their file, so the
-    // policy accommodates it.
-    contentSecurityPolicy: {
-      directives: {
-        ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-        'script-src': ["'self'", "'unsafe-inline'"],
-        'script-src-attr': ["'unsafe-inline'"],
-        // Poster artwork will come from TMDB once that import lands.
-        'img-src': ["'self'", 'data:', 'https:'],
-      },
-    },
-    // Also stop advertising the framework.
-    hidePoweredBy: true,
-  })
-);
-app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
-app.use(express.json({ limit: '100kb' }));
-app.use(express.urlencoded({ extended: true, limit: '100kb' }));
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Static frontend files from 'public'
 app.use(express.static(path.join(__dirname, 'public')));
@@ -134,8 +96,7 @@ app.use('/api/bookings', limit(60 * 1000, 60), bookingsRouter);
 app.use('/api/movies', moviesRouter);
 app.use('/api/shows', showsRouter);
 
-// Unknown /api paths must return JSON, never the SPA shell -- otherwise a
-// frontend parsing a 404 body gets HTML and fails with a confusing error.
+// Unknown /api paths must return JSON, never the SPA shell
 app.use('/api', (req, res) => {
   res.status(404).json({
     error: { code: 'NOT_FOUND', message: `Route ${req.method} ${req.originalUrl} not found` },
@@ -151,58 +112,7 @@ app.use((req, res) => {
   return res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-/**
- * Terminal error handler.
- *
- * Express's default handler renders HTML with a stack trace, which leaks source
- * paths and contradicts the documented "all errors are JSON" contract. This
- * keeps every failure shape -- thrown TypeError, malformed JSON body from
- * express.json(), oversized payload -- on the same JSON envelope.
- */
-// eslint-disable-next-line no-unused-vars
-app.use((err, req, res, next) => {
-  // Body parser failures arrive as 400 with a status/type marker.
-  if (err.type === 'entity.parse.failed') {
-    return res.status(400).json({
-      error: { code: 'BAD_REQUEST', message: 'Request body is not valid JSON' },
-    });
-  }
-  if (err.type === 'entity.too.large') {
-    return res.status(413).json({
-      error: { code: 'PAYLOAD_TOO_LARGE', message: 'Request body is too large' },
-    });
-  }
-
-  const status = err.status || err.statusCode || 500;
-  if (status >= 500) {
-    console.error('Unhandled error:', err);
-  }
-
-  return res.status(status).json({
-    error: {
-      code: status >= 500 ? 'SERVER_ERROR' : 'REQUEST_ERROR',
-      // In production the detail stays in the log, not the response.
-      message: isProd ? 'Something went wrong' : err.message,
-    },
-  });
-});
-
-/** Verifies config at boot so a bad .env fails immediately and loudly. */
-function assertConfig() {
-  if (!process.env.JWT_SECRET) {
-    throw new Error('JWT_SECRET is not set. Copy .env.example to .env and set a strong secret.');
-  }
-  if (process.env.JWT_SECRET === 'dev-only-change-me' && isProd) {
-    throw new Error('JWT_SECRET is still the example value. Generate a real secret before deploying.');
-  }
-  // A short secret is brute-forceable; HS256 gives no protection against it.
-  // Checking only in production kept the same weak value live on every
-  // non-production deploy, which is where staging credentials leak from.
-  if (process.env.JWT_SECRET.length < 32) {
-    throw new Error('JWT_SECRET must be at least 32 characters. Generate one with: openssl rand -hex 32');
-  }
-}
-
+// Verify the database at boot
 async function main() {
   assertConfig();
   await db.connect();
@@ -211,23 +121,9 @@ async function main() {
   const server = app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
   });
-
-  // Drain in-flight requests before exiting, so a deploy or restart never cuts
-  // a booking off mid-transaction.
-  const shutdown = (signal) => () => {
-    console.log(`${signal} received, shutting down`);
-    server.close(async () => {
-      await db.close().catch(() => {});
-      process.exit(0);
-    });
-    // Don't hang forever on a stuck connection.
-    setTimeout(() => process.exit(1), 10000).unref();
-  };
-  process.on('SIGTERM', shutdown('SIGTERM'));
-  process.on('SIGINT', shutdown('SIGINT'));
 }
 
-main().catch((err) => {
-  console.error('Failed to start:', err.message);
+main().catch((error) => {
+  console.error('Failed to start:', error);
   process.exit(1);
 });

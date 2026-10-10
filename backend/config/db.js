@@ -14,70 +14,42 @@ require('dotenv').config();
  */
 types.setTypeParser(1082, (value) => value);
 
-/**
- * Postgres pool.
- *
- * Only the explicit DB_* names below are honoured, never USERNAME/PASSWORD --
- * generic OS variables that on a shared host could silently become the
- * database password.
- *
- * TLS: hosted providers (Neon, Supabase, RDS) require SSL and present a real
- * certificate chain, so verification stays ON. `DB_SSL_REJECT_UNAUTHORIZED=false`
- * is an explicit, opt-in escape hatch for a provider with a self-signed cert --
- * turning it off globally would allow a MITM against the production database.
- * A localhost DATABASE_URL is treated as local, so local dev over a plain
- * connection string still works.
- */
-const isLocal = /^(localhost|127\.0\.0\.1|movielanche-pg|postgres)$/i.test(
-  process.env.DB_HOST || ''
-);
-const usingUrl = Boolean(process.env.DATABASE_URL);
-const urlIsLocal = usingUrl && /^postgres(ql)?:\/\/[^@]*@(localhost|127\.0\.0\.1)(:|%)/.test(
+const dbUser = process.env.DB_USERNAME;
+const dbPassword = process.env.PASSWORD;
+const dbHost = process.env.HOST;
+const dbPort = parseInt(process.env.PORT || 5432,10);
+const dbName = process.env.DB_NAME;
+
+const pool = new Pool(
   process.env.DATABASE_URL
+    ? {
+        connectionString: process.env.DATABASE_URL,
+        ssl: { rejectUnauthorized: false }
+      }
+    : {
+        user: dbUser,
+        host: dbHost,
+        database: dbName,
+        password: dbPassword,
+        port: dbPort,
+        ssl: { rejectUnauthorized: false }
+      }
 );
-const treatAsLocal = !usingUrl ? isLocal : urlIsLocal;
 
-// Verification on for any remote database; off only for a local one.
-const rejectUnauthorized =
-  process.env.DB_SSL_REJECT_UNAUTHORIZED === 'false' ? false : true;
-
-const poolConfig = usingUrl
-  ? { connectionString: process.env.DATABASE_URL }
-  : {
-      user: process.env.DB_USER,
-      host: process.env.DB_HOST || 'localhost',
-      database: process.env.DB_NAME || 'movielanche',
-      password: process.env.DB_PASSWORD,
-      port: parseInt(process.env.DB_PORT || '5432', 10),
-    };
-
-const pool = new Pool({
-  ...poolConfig,
-  ssl: treatAsLocal ? undefined : { rejectUnauthorized },
-  max: 10,
-  idleTimeoutMillis: 30000,
-  // Without these a saturated pool makes requests hang forever instead of
-  // failing fast, which turns a small outage into an indefinite one.
-  connectionTimeoutMillis: 5000,
-  statement_timeout: 15000,
+pool.on('connect', () => {
+  console.log('Connected to PostgreSQL database');
 });
 
 pool.on('error', (err) => {
-  console.error('Unexpected error on idle Postgres client:', err.message);
+  console.error('Unexpected error on idle database client', err);
 });
 
-async function query(text, params) {
-  return pool.query(text, params);
-}
-
-/** Verifies connectivity at boot so a bad .env fails loudly, not per request. */
 async function connect() {
   const res = await pool.query('SELECT 1 AS ok');
   return res.rows[0].ok === 1;
 }
 
-async function close() {
-  await pool.end();
-}
-
-module.exports = { pool, query, connect, close };
+module.exports = {
+  query: (text, params) => pool.query(text, params),
+  pool, connect
+};

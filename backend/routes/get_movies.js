@@ -1,0 +1,12 @@
+const express = require('express');
+const db = require('../config/db');
+
+const router = express.Router();
+
+async function getMovies(id) {
+    const sql = 'SELECT * FROM movie_details WHERE movie_id = $1';
+    const result = await db.query(sql, [id]);
+    return result.rows[0];
+}
+
+getMovies(101).then(console.log).catch(console.error);

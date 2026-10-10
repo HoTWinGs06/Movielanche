@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450">
+  <rect width="300" height="450" fill="#1e293b"/>
+  <circle cx="150" cy="180" r="60" fill="#334155"/>
+  <text x="150" y="195" font-size="50" text-anchor="middle" fill="#38bdf8">🎬</text>
+  <text x="150" y="290" font-family="sans-serif" font-size="20" font-weight="bold" text-anchor="middle" fill="#f8fafc">MovieLanche</text>
+  <text x="150" y="320" font-family="sans-serif" font-size="14" text-anchor="middle" fill="#94a3b8">Movie Directory</text>
+</svg>
