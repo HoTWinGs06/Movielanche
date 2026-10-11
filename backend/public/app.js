@@ -209,15 +209,19 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Switch User Button Event Listeners
-  btnAlice.addEventListener('click', () => {
-    const alice = demoUsers.find(u => u.email.includes('alice')) || demoUsers[0];
-    if (alice) switchDemoUser(alice);
-  });
+  if (btnAlice) {
+    btnAlice.addEventListener('click', () => {
+      const alice = demoUsers.find(u => u.email.includes('alice')) || demoUsers[0];
+      if (alice) switchDemoUser(alice);
+    });
+  }
 
-  btnBob.addEventListener('click', () => {
-    const bob = demoUsers.find(u => u.email.includes('bob')) || demoUsers[1];
-    if (bob) switchDemoUser(bob);
-  });
+  if (btnBob) {
+    btnBob.addEventListener('click', () => {
+      const bob = demoUsers.find(u => u.email.includes('bob')) || demoUsers[1];
+      if (bob) switchDemoUser(bob);
+    });
+  }
 
   // --- FETCH MOVIES CATALOGUE ---
   async function fetchMovies() {

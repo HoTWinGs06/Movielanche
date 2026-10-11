@@ -2,9 +2,9 @@ const express = require('express');
 const db = require('../config/db');
 const { processExpiredLocks, getUserTimeoutStatus } = require('../utils/lockManager');
 const jwt = require('jsonwebtoken');
-
+const { qId } = require('../config/validate');
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'movielanche_default_secret_key_2026';
+const JWT_SECRET = process.env.JWT_SECRET;
 
 function getUserIdFromAuthHeader(req) {
   const header = req.headers.authorization || '';

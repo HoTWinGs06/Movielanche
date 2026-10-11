@@ -1,11 +1,13 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MovieLanche - Real-Time Seat Booking & Locking System</title>
   <link rel="stylesheet" href="style.css">
 </head>
+
 <body>
 
   <header class="app-header">
@@ -15,16 +17,6 @@
         <p class="tagline">Real-Time Seat Locking & Booking System</p>
       </div>
 
-      <!-- Quick User Switcher Bar for Concurrent Booking Demo -->
-      <div class="demo-user-bar">
-        <span class="switcher-label">⚡ Active User:</span>
-        <button id="switch-user-alice" class="demo-user-btn active" data-user="alice">
-          👤 Alice (User 1)
-        </button>
-        <button id="switch-user-bob" class="demo-user-btn" data-user="bob">
-          👤 Bob (User 2)
-        </button>
-      </div>
 
       <div class="user-nav" id="user-nav">
         <!-- Rendered dynamically by app.js: User Badge & Logout -->
@@ -43,7 +35,8 @@
       <span class="timeout-icon">⚠️</span>
       <div class="timeout-text">
         <strong>30-Second Cooldown Penalty Active!</strong>
-        <p>Your 5-minute seat lock expired without payment. You must wait <span id="timeout-countdown">30</span> seconds before locking seats again.</p>
+        <p>Your 5-minute seat lock expired without payment. You must wait <span id="timeout-countdown">30</span> seconds
+          before locking seats again.</p>
       </div>
     </div>
   </div>
@@ -77,7 +70,8 @@
     <section id="section-booking" class="view-section hidden">
       <div class="booking-header-card">
         <h2>🎟️ Seat Booking & Concurrent Locking System</h2>
-        <p class="subtitle">Experience immediate 5-minute seat locks, concurrent user queueing, 30-second penalty timeouts, and real-time open seat notifications!</p>
+        <p class="subtitle">Experience immediate 5-minute seat locks, concurrent user queueing, 30-second penalty
+          timeouts, and real-time open seat notifications!</p>
 
         <!-- Show Timing Selector -->
         <div class="show-selector-bar">
@@ -118,7 +112,8 @@
           <div id="no-seat-selected" class="action-placeholder">
             <div class="placeholder-icon">💺</div>
             <h3>No Seat Locked</h3>
-            <p>Click on any <strong>Available</strong> seat to lock it for 5 minutes, or click a <strong>Locked Seat</strong> to queue in line for when it opens!</p>
+            <p>Click on any <strong>Available</strong> seat to lock it for 5 minutes, or click a <strong>Locked
+                Seat</strong> to queue in line for when it opens!</p>
           </div>
 
           <!-- Active Lock Panel (5-Minute Countdown & Details Form) -->
@@ -132,7 +127,9 @@
             <div class="timer-box">
               <div class="timer-label">Time Remaining to Complete Payment:</div>
               <div id="lock-timer" class="timer-display">05:00</div>
-              <div class="timer-progress-bar"><div id="timer-progress" class="timer-progress"></div></div>
+              <div class="timer-progress-bar">
+                <div id="timer-progress" class="timer-progress"></div>
+              </div>
             </div>
 
             <!-- Customer Details & Payment Form -->
@@ -175,7 +172,8 @@
           <div id="queue-status-panel" class="queue-status-panel hidden">
             <div class="queue-badge">⏳ IN QUEUE (POSITION #<span id="queue-pos-num">1</span>)</div>
             <h3>Locked in Line for Seat <span id="queued-seat-num">A1</span></h3>
-            <p>This seat is currently held by another user. If they fail to complete payment within 5 minutes, <strong>the seat will automatically open for you</strong> and your 5-minute booking window will start!</p>
+            <p>This seat is currently held by another user. If they fail to complete payment within 5 minutes,
+              <strong>the seat will automatically open for you</strong> and your 5-minute booking window will start!</p>
             <button id="leave-queue-btn" class="btn secondary-btn">Leave Queue</button>
           </div>
 
@@ -251,4 +249,5 @@
 
   <script src="app.js"></script>
 </body>
+
 </html>

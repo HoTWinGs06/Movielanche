@@ -60,11 +60,6 @@ router.get('/', async (req, res) => {
     where.push(`genre ILIKE $${params.length}`);
   }
 
-  // Pushed BEFORE the SQL is built so the placeholder indices line up.
-  params.push(paging.limit, paging.offset);
-  const limitIdx = params.length - 1;
-  const offsetIdx = params.length;
-
   const sql = `
     SELECT *
     FROM movie_details

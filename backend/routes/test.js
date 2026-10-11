@@ -3,8 +3,8 @@
  * Use control + c to stop the server after testing.
  */
 
-const {Pool} = require('pg');
-require('dotenv').config({ override: true });  
+const { Pool } = require('pg');
+require('dotenv').config({ override: true });
 const express = require('express');
 
 const pool = new Pool({
@@ -22,7 +22,7 @@ async function testConnection() {
     try {
         console.log('Testing database connection...');
 
-        const result = await pool.query('SELECT movie_name FROM movie_details LIMIT 1');
+        const result = await pool.query('SELECT movie_title FROM movie_details LIMIT 1');
 
         console.log('Connected successfully!');
         console.log('Movie name:', result);
