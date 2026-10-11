@@ -705,10 +705,108 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // --- AUTH MODALS & HELPERS ---
+  let modalGoogleInitDone = false;
+  async function initModalGoogleAuth() {
+    const modalBtnContainer = document.getElementById('modal-google-btn-container');
+    const modalNotice = document.getElementById('modal-google-notice');
+    if (!modalBtnContainer) return;
+
+    try {
+      const sessionSavedId = sessionStorage.getItem('movielanche_google_client_id');
+      let clientId = sessionSavedId || '';
+
+      if (!clientId) {
+        const res = await fetch('/api/auth/config');
+        const data = await res.json();
+        if (data.success && data.isConfigured && data.clientId) {
+          clientId = data.clientId;
+        }
+      }
+
+      if (clientId) {
+        if (modalNotice) modalNotice.classList.add('hidden');
+        renderGoogleModalButton(clientId);
+      } else {
+        if (modalNotice) modalNotice.classList.remove('hidden');
+      }
+    } catch (err) {
+      console.warn('Failed to load Google Auth config in modal:', err);
+    }
+  }
+
+  function renderGoogleModalButton(clientId) {
+    const modalBtnContainer = document.getElementById('modal-google-btn-container');
+    if (!modalBtnContainer) return;
+    const interval = setInterval(() => {
+      if (window.google && window.google.accounts && window.google.accounts.id) {
+        clearInterval(interval);
+        try {
+          google.accounts.id.initialize({
+            client_id: clientId,
+            callback: handleModalGoogleCallback,
+            auto_select: false
+          });
+          modalBtnContainer.innerHTML = '';
+          google.accounts.id.renderButton(modalBtnContainer, {
+            theme: 'filled_black',
+            size: 'large',
+            type: 'standard',
+            shape: 'rectangular',
+            text: 'continue_with',
+            width: 280
+          });
+          modalGoogleInitDone = true;
+        } catch (e) {
+          console.error('Google button render error:', e);
+        }
+      }
+    }, 150);
+    setTimeout(() => clearInterval(interval), 8000);
+  }
+
+  const modalClientIdBtn = document.getElementById('modal-client-id-btn');
+  if (modalClientIdBtn) {
+    modalClientIdBtn.addEventListener('click', () => {
+      const input = document.getElementById('modal-client-id-input');
+      const val = input ? input.value.trim() : '';
+      if (val) {
+        sessionStorage.setItem('movielanche_google_client_id', val);
+        const modalNotice = document.getElementById('modal-google-notice');
+        if (modalNotice) modalNotice.classList.add('hidden');
+        renderGoogleModalButton(val);
+      }
+    });
+  }
+
+  async function handleModalGoogleCallback(response) {
+    if (!response || !response.credential) return;
+    try {
+      const res = await fetch('/api/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential: response.credential })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error?.message || 'Google authentication failed');
+
+      localStorage.setItem('token', data.token || data.accessToken);
+      localStorage.setItem('user', JSON.stringify(data.user));
+      currentUser = data.user;
+      updateUserUI();
+      closeAuthModal();
+      showToast(`Welcome, ${currentUser.name}! Signed in via Google.`, 'success');
+      if (currentShowId) fetchSeatMap(currentShowId);
+    } catch (err) {
+      authAlert.textContent = err.message;
+      authAlert.classList.remove('hidden');
+    }
+  }
+
   function openAuthModal(tab = 'login') {
     authAlert.classList.add('hidden');
     authModal.classList.remove('hidden');
     switchAuthTab(tab);
+    initModalGoogleAuth();
   }
 
   function closeAuthModal() {

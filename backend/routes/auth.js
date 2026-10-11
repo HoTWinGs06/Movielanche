@@ -1,6 +1,8 @@
+const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const express = require('express');
+const { OAuth2Client } = require('google-auth-library');
 const db = require('../config/db');
 const { isPlainObject, withinBcryptLimit, MAX_NAME_LENGTH } = require('../config/validate');
 
@@ -10,6 +12,9 @@ const ACCESS_TTL_SECONDS = 24 * 60 * 60; // 24 hours
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD_LENGTH = 6;
 const JWT_SECRET = process.env.JWT_SECRET || 'movielanche_default_secret_key_2026';
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+const DUMMY_HASH = bcrypt.hashSync('movielanche-timing-equaliser', 10);
 
 function signAccessToken(user) {
   const userId = user.user_id || user.id;
@@ -38,9 +43,9 @@ function publicUser(row) {
 /** Bearer token authentication middleware */
 function requireAuth(req, res, next) {
   const header = req.headers.authorization || '';
-  const [scheme, token] = header.split(' ');
+  const [scheme, token] = header.trim().split(/\s+/);
 
-  if (scheme !== 'Bearer' || !token) {
+  if (!token || !scheme || scheme.toLowerCase() !== 'bearer') {
     return res.status(401).json({
       error: { code: 'UNAUTHENTICATED', message: 'Missing or malformed Authorization header' },
     });
@@ -56,6 +61,18 @@ function requireAuth(req, res, next) {
     });
   }
 }
+
+// GET /api/auth/config — Expose public auth configuration to frontend
+router.get('/config', (req, res) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID || '';
+  const isPlaceholder = !clientId || clientId.includes('YOUR_GOOGLE_CLIENT_ID') || clientId.includes('<');
+  return res.json({
+    success: true,
+    clientId: isPlaceholder ? '' : clientId,
+    rawClientId: clientId,
+    isConfigured: !isPlaceholder
+  });
+});
 
 // GET /api/auth/demo-users — helper to get tokens for Alice and Bob for easy frontend testing
 router.get('/demo-users', async (req, res) => {
@@ -121,8 +138,6 @@ router.post('/register', async (req, res) => {
     }
     console.error('Registration error:', err.message);
     return res.status(500).json({ error: { code: 'SERVER_ERROR', message: 'Registration failed' } });
-  } finally {
-    client.release();
   }
 });
 
@@ -166,6 +181,96 @@ router.post('/login', async (req, res) => {
   } catch (err) {
     console.error('Login error:', err.message);
     return res.status(500).json({ error: { code: 'SERVER_ERROR', message: 'Login failed' } });
+  }
+});
+
+// POST /api/auth/google — Verify Google ID Token & login or register user
+router.post('/google', async (req, res) => {
+  const { credential, idToken, token } = req.body || {};
+  const rawToken = credential || idToken || token;
+
+  if (!rawToken || typeof rawToken !== 'string') {
+    return res.status(400).json({
+      error: { code: 'BAD_REQUEST', message: 'Google credential / ID token is required' }
+    });
+  }
+
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const isPlaceholder = !clientId || clientId.includes('YOUR_GOOGLE_CLIENT_ID') || clientId.includes('<');
+
+  try {
+    let payload;
+    try {
+      const verifyOptions = { idToken: rawToken };
+      if (!isPlaceholder && clientId) {
+        verifyOptions.audience = clientId;
+      }
+      const ticket = await googleClient.verifyIdToken(verifyOptions);
+      payload = ticket.getPayload();
+    } catch (verifyErr) {
+      console.error('Google token verification failed:', verifyErr.message);
+      return res.status(401).json({
+        error: {
+          code: 'INVALID_CREDENTIALS',
+          message: `Google token verification failed: ${verifyErr.message}`
+        }
+      });
+    }
+
+    if (!payload || !payload.email) {
+      return res.status(400).json({
+        error: { code: 'BAD_REQUEST', message: 'Google token does not contain a verified email address' }
+      });
+    }
+
+    const email = payload.email.toLowerCase().trim();
+    const name = (payload.name || payload.given_name || email.split('@')[0] || 'Google User').trim();
+    const picture = payload.picture || '';
+
+    // Check if user already exists in Neon DB
+    const existing = await db.query(
+      'SELECT user_id, name, email_id, email, text, created_at FROM users WHERE LOWER(email_id) = $1 OR LOWER(email) = $1',
+      [email]
+    );
+
+    let user;
+    if (existing.rowCount > 0) {
+      user = existing.rows[0];
+      if (!user.name && name) {
+        await db.query('UPDATE users SET name = $1 WHERE user_id = $2', [name, user.user_id]);
+        user.name = name;
+      }
+    } else {
+      // Create new user in Neon DB
+      // password_hash has NOT NULL constraint in schema, generate secure random hash
+      const randomSecret = crypto.randomBytes(32).toString('hex');
+      const passwordHash = await bcrypt.hash(randomSecret, 10);
+      const insertRes = await db.query(
+        `INSERT INTO users (name, email_id, email, password_hash, text)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING user_id, name, email_id, email, text, created_at`,
+        [name, email, email, passwordHash, picture ? `google_auth:${picture}` : 'google_auth']
+      );
+      user = insertRes.rows[0];
+    }
+
+    const accessToken = signAccessToken(user);
+    const userPayload = publicUser(user);
+    if (picture) {
+      userPayload.picture = picture;
+    }
+
+    return res.json({
+      success: true,
+      token: accessToken,
+      accessToken,
+      user: userPayload
+    });
+  } catch (err) {
+    console.error('Google auth processing error:', err.message);
+    return res.status(500).json({
+      error: { code: 'SERVER_ERROR', message: 'Google authentication failed' }
+    });
   }
 });
 
