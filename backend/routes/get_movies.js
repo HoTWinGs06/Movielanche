@@ -9,4 +9,9 @@ async function getMovies(id) {
     return result.rows[0];
 }
 
-getMovies(101).then(console.log).catch(console.error);
+(async () => {
+    const movie = await getMovies(2);
+    console.log(movie);
+})();
+
+// module.exports = { getMovies };

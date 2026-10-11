@@ -12,7 +12,27 @@ const bookingsRouter = require('./routes/bookings');
 
 const app = express();
 const PORT = parseInt(3000, 10);
-
+// app.use(
+//   helmet({
+//     // The default CSP has script-src 'self' + script-src-attr 'none', which
+//     // BLOCKS the inline onerror handler the committed public/app.js puts on
+//     // every <img> -- posters silently stopped falling back. Two options here:
+//     // allow inline attributes (weaker, but keeps the teammate's file working
+//     // untouched), or refactor app.js. We are not editing their file, so the
+//     // policy accommodates it.
+//     contentSecurityPolicy: {
+//       directives: {
+//         ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+//         'script-src': ["'self'", "'unsafe-inline'"],
+//         'script-src-attr': ["'unsafe-inline'"],
+//         // Poster artwork will come from TMDB once that import lands.
+//         'img-src': ["'self'", 'data:', 'https:'],
+//       },
+//     },
+//     // Also stop advertising the framework.
+//     hidePoweredBy: true,
+//   })
+// );
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -111,7 +131,20 @@ app.use((req, res) => {
   }
   return res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
-
+function assertConfig() {
+  if (!process.env.JWT_SECRET) {
+    throw new Error('JWT_SECRET is not set. Copy .env.example to .env and set a strong secret.');
+  }
+  if (process.env.JWT_SECRET === 'dev-only-change-me' && isProd) {
+    throw new Error('JWT_SECRET is still the example value. Generate a real secret before deploying.');
+  }
+  // A short secret is brute-forceable; HS256 gives no protection against it.
+  // Checking only in production kept the same weak value live on every
+  // non-production deploy, which is where staging credentials leak from.
+  if (process.env.JWT_SECRET.length < 32) {
+    throw new Error('JWT_SECRET must be at least 32 characters. Generate one with: openssl rand -hex 32');
+  }
+}
 // Verify the database at boot
 function assertConfig() {
   const secret = process.env.JWT_SECRET;
